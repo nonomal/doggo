@@ -8,68 +8,198 @@ import (
 )
 
 // appHelpTextTemplate is the text/template to customise the Help output.
-// Uses text/template to render templates.
 var appHelpTextTemplate = `{{ "NAME" | color "" "heading" }}:
-  {{ .Name | color "green" "bold" }} 🐶 {{.Description}}
+  {{ .Name | color "green" "bold" }} 🐶 {{ .Description }}
 
 {{ "USAGE" | color "" "heading" }}:
   {{ .Name | color "green" "bold" }} [--] {{ "[query options]" | color "yellow" "" }} {{ "[arguments...]" | color "cyan" "" }}
 
 {{ "VERSION" | color "" "heading" }}:
-  {{.Version | color "red" "" }} - {{.Date | color "red" ""}}
+  {{ .Version | color "red" "" }} - {{ .Date | color "red" "" }}
 
 {{ "EXAMPLES" | color "" "heading" }}:
-  {{ .Name | color "green" "bold" }} {{ "mrkaran.dev" | color "cyan" "" }}                            	Query a domain using defaults.
-  {{ .Name | color "green" "bold" }} {{ "mrkaran.dev CNAME" | color "cyan" "" }}                 	Looks up for a CNAME record.
-  {{ .Name | color "green" "bold" }} {{ "mrkaran.dev MX @9.9.9.9" | color "cyan" "" }}              	Uses a custom DNS resolver.
-  {{ .Name | color "green" "bold" }} {{"-q mrkaran.dev -t MX -n 1.1.1.1" | color "yellow" ""}}   	Using named arguments.
+  {{- range $example := .Examples }}
+  {{ $.Name | color "green" "bold" }} {{ printf "%-40s" $example.Command | color "cyan" "" }}{{ $example.Description }}
+  {{- end }}
 
-{{ "Free Form Arguments" | color "" "heading" }}:
-  Supply hostnames, query types, classes without any flag. For eg:
-  {{ .Name | color "green" "bold" }} {{"mrkaran.dev A @1.1.1.1" | color "cyan" "" }}
+{{ "FREE FORM ARGUMENTS" | color "" "heading" }}:
+  Supply hostnames, query types, and classes without flags. Example:
+  {{ .Name | color "green" "bold" }} {{ "mrkaran.dev A @1.1.1.1" | color "cyan" "" }}
 
-{{ "Transport Options" | color "" "heading" }}:
-  Based on the URL scheme the correct resolver is chosen.
-  Fallbacks to UDP resolver if no scheme is present.
+  Bare decimal arguments and TYPE<number> are record types. Use --query=65
+  to query a numeric single-label hostname.
 
-  {{"@udp://" | color "yellow" ""}}        eg: @1.1.1.1 initiates a {{"UDP" | color "cyan" ""}} resolver for 1.1.1.1:53.
-  {{"@tcp://" | color "yellow" ""}}        eg: @tcp://1.1.1.1 initiates a {{"TCP" | color "cyan" ""}} resolver for 1.1.1.1:53.
-  {{"@https://" | color "yellow" ""}}      eg: @https://cloudflare-dns.com/dns-query initiates a {{"DOH" | color "cyan" ""}} resolver for Cloudflare DoH server.
-  {{"@tls://" | color "yellow" ""}}        eg: @tls://1.1.1.1 initiates a {{"DoT" | color "cyan" ""}} resolver for 1.1.1.1:853.
-  {{"@sdns://" | color "yellow" ""}}       initiates a {{"DNSCrypt" | color "cyan" ""}} or {{"DoH" | color "cyan" ""}} resolver using its DNS stamp.
+{{ "TRANSPORT OPTIONS" | color "" "heading" }}:
+  Specify the protocol with a URL-type scheme.
+  UDP is used if no scheme is specified.
 
-{{ "Query Options" | color "" "heading" }}:
-  {{"-q, --query=HOSTNAME" | color "yellow" ""}}        Hostname to query the DNS records for (eg {{"mrkaran.dev" | color "cyan" ""}}).
-  {{"-t, --type=TYPE" | color "yellow" ""}}             Type of the DNS Record ({{"A, MX, NS" | color "cyan" ""}} etc).
-  {{"-n, --nameserver=ADDR" | color "yellow" ""}}       Address of a specific nameserver to send queries to ({{"9.9.9.9, 8.8.8.8" | color "cyan" ""}} etc).
-  {{"-c, --class=CLASS" | color "yellow" ""}}           Network class of the DNS record ({{"IN, CH, HS" | color "cyan" ""}} etc).
-  {{"-x, --reverse" | color "yellow" ""}}               Performs a DNS Lookup for an IPv4 or IPv6 address. Sets the query type and class to PTR and IN respectively.
+  {{- range $opt := .TransportOptions }}
+  {{ printf "%-12s" $opt.Scheme | color "yellow" "" }}{{ printf "%-68s" $opt.Example }}{{ $opt.Description | color "cyan" "" }}
+  {{- end }}
 
-{{ "Resolver Options" | color "" "heading" }}:
-  {{"--ndots=INT" | color "yellow" ""}}        Specify ndots parameter. Takes value from /etc/resolv.conf if using the system namesever or 1 otherwise.
-  {{"--search" | color "yellow" ""}}           Use the search list defined in resolv.conf. Defaults to true. Set --search=false to disable search list.
-  {{"--timeout" | color "yellow" ""}}          Specify timeout (in seconds) for the resolver to return a response.
-  {{"-4 --ipv4" | color "yellow" ""}}          Use IPv4 only.
-  {{"-6 --ipv6" | color "yellow" ""}}          Use IPv6 only.
+{{ "SUBCOMMANDS" | color "" "heading" }}:
+  {{- range $opt := .Subcommands }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
 
-{{ "Output Options" | color "" "heading" }}:
-  {{"-J, --json " | color "yellow" ""}}                 Format the output as JSON.
-  {{"--color   " | color "yellow" ""}}                  Defaults to true. Set --color=false to disable colored output.
-  {{"--debug " | color "yellow" ""}}                    Enable debug logging.
-  {{"--time" | color "yellow" ""}}                      Shows how long the response took from the server.
+{{ "GENERAL OPTIONS" | color "" "heading" }}:
+  {{- range $opt := .GeneralOptions }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
+
+{{ "QUERY OPTIONS" | color "" "heading" }}:
+  {{- range $opt := .QueryOptions }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
+
+{{ "RESOLVER OPTIONS" | color "" "heading" }}:
+  {{- range $opt := .ResolverOptions }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
+
+{{ "QUERY FLAGS" | color "" "heading" }}:
+  {{- range $flag := .QueryFlags }}
+  {{ printf "%-30s" $flag.Flag | color "yellow" "" }}{{ $flag.Description }}
+  {{- end }}
+
+{{ "EDNS OPTIONS" | color "" "heading" }}:
+  {{- range $opt := .EdnsOptions }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
+
+{{ "OUTPUT OPTIONS" | color "" "heading" }}:
+  {{- range $opt := .OutputOptions }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
+
+{{ "GLOBALPING OPTIONS" | color "" "heading" }}:
+  {{- range $opt := .GlobalPingOptions }}
+  {{ printf "%-30s" $opt.Flag | color "yellow" "" }}{{ $opt.Description }}
+  {{- end }}
+
+{{ "CONFIGURATION" | color "" "heading" }}:
+  Defaults for any long flag can be set via a TOML config file or environment
+  variables. Precedence (lowest to highest):
+  flag defaults < config file < environment variables < command line flags.
+
+  {{ "Config file search order" | color "" "bold" }} (first match wins):
+    1. --config=PATH
+    2. DOGGO_CONFIG environment variable
+    3. $XDG_CONFIG_HOME/doggo/config.toml (or the OS user config dir)
+    4. ~/.doggo.toml
+
+  {{ "Example config file" | color "" "bold" }}:
+    strategy = "first"
+    color    = false
+    timeout  = "10s"
+
+  {{ "Environment variables" | color "" "bold" }}: DOGGO_ + upper-cased flag name with "-" as "_".
+  Example: DOGGO_STRATEGY=first, DOGGO_COLOR=false, DOGGO_NAMESERVER="1.1.1.1,9.9.9.9"
 `
 
 func renderCustomHelp() {
-	helpTmplVars := map[string]string{
+	type Option struct {
+		Flag        string
+		Description string
+	}
+
+	type Example struct {
+		Command     string
+		Description string
+	}
+
+	type TransportOption struct {
+		Scheme      string
+		Example     string
+		Description string
+	}
+
+	helpTmplVars := map[string]interface{}{
 		"Name":        "doggo",
 		"Description": "DNS Client for Humans",
 		"Version":     buildVersion,
 		"Date":        buildDate,
+		"Examples": []Example{
+			{"mrkaran.dev", "Query a domain using defaults."},
+			{"mrkaran.dev CNAME", "Query for a CNAME record."},
+			{"example.com --trace", "Trace the delegation path from the root servers."},
+			{"mrkaran.dev MX @9.9.9.9", "Uses a custom DNS resolver."},
+			{"-q mrkaran.dev -t MX -n 1.1.1.1", "Using named arguments."},
+			{"mrkaran.dev --aa --ad", "Query with Authoritative Answer and Authenticated Data flags set."},
+			{"mrkaran.dev --cd --do", "Query with Checking Disabled and DNSSEC OK flags set."},
+			{"mrkaran.dev --gp-from Germany", "Query using Globalping API from a specific location."},
+			{"mrkaran.dev @https://dns.google/dns-query --http3", "Query a DoH nameserver over HTTP/3."},
+		},
+		"TransportOptions": []TransportOption{
+			{"@udp://", "eg: @1.1.1.1", "initiates a UDP query to 1.1.1.1:53."},
+			{"@tcp://", "eg: @tcp://1.1.1.1", "initiates a TCP query to 1.1.1.1:53."},
+			{"@https://", "eg: @https://cloudflare-dns.com/dns-query", "initiates a DOH query to Cloudflare via DoH."},
+			{"@tls://", "eg: @tls://1.1.1.1", "initiates a DoT query to 1.1.1.1:853."},
+			{"@sdns://", "initiates a DNSCrypt or DoH query using a DNS stamp.", ""},
+			{"@quic://", "initiates a DOQ query.", ""},
+		},
+		"Subcommands": []Option{
+			{"completions [bash|zsh|fish]", "Generate the shell completion script for the specified shell."},
+		},
+		"GeneralOptions": []Option{
+			{"--config=PATH", "Load defaults from a TOML config file. See CONFIGURATION below."},
+			{"--version", "Show version of doggo."},
+		},
+		"QueryOptions": []Option{
+			{"-q, --query=HOSTNAME", "Hostname to query the DNS records for (eg mrkaran.dev)."},
+			{"-t, --type=TYPE", "DNS record type by name, number, or TYPE<number> (for example HTTPS, 65, or TYPE65)."},
+			{"-n, --nameserver=ADDR", "Address of a specific nameserver to send queries to (9.9.9.9, 8.8.8.8 etc)."},
+			{"-c, --class=CLASS", "Network class of the DNS record (IN, CH, HS etc)."},
+			{"-x, --reverse", "Performs a DNS Lookup for an IPv4 or IPv6 address. Sets the query type and class to PTR and IN respectively."},
+			{"--any", "Query all supported DNS record types (A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, TXT, CAA)."},
+			{"-A, --authoritative", "Find the domain's zone via SOA and query its delegated authoritative nameservers (the NS RRset). Honours --strategy to narrow the set."},
+			{"--trace", "Trace the delegation path from the root servers to the authoritative answer. Asks exactly one question (default A/IN); an explicit nameserver only primes the root zone."},
+		},
+		"ResolverOptions": []Option{
+			{"--strategy=STRATEGY", "Specify strategy to query nameservers. Options: all, random, first, internal (RFC 1918/ULA private IPs only)."},
+			{"--ndots=INT", "Specify ndots parameter. Takes value from /etc/resolv.conf if using the system namesever or 1 otherwise."},
+			{"--search", "Use the search list defined in resolv.conf. Defaults to true. Set --search=false to disable search list."},
+			{"--timeout=DURATION", "Specify timeout for the resolver to return a response (e.g., 5s, 400ms, 1m)."},
+			{"-4, --ipv4", "Use IPv4 only."},
+			{"-6, --ipv6", "Use IPv6 only."},
+			{"--http3", "Use HTTP/3 for HTTPS (DoH) nameservers. Requires at least one DoH nameserver."},
+			{"--tls-hostname=HOSTNAME", "Provide a hostname for TLS certificate verification."},
+			{"--skip-hostname-verification", "Skip TLS hostname verification for encrypted resolvers."},
+			{"-b, --source=IP", "Bind queries to a local source IP address, like dig -b. A fixed source port is not supported because queries run concurrently. Not supported for DNSCrypt."},
+		},
+		"QueryFlags": []Option{
+			{"--aa", "Set Authoritative Answer flag."},
+			{"--ad", "Set Authenticated Data flag."},
+			{"--cd", "Set Checking Disabled flag."},
+			{"--rd", "Set Recursion Desired flag (default: true)."},
+			{"--z", "Set Z flag (reserved for future use)."},
+			{"--do", "Set DNSSEC OK flag."},
+		},
+		"EdnsOptions": []Option{
+			{"--nsid", "Request Name Server Identifier (NSID) to identify the nameserver."},
+			{"--cookie", "Request DNS Cookie for enhanced security and protection against spoofing."},
+			{"--padding", "Request EDNS padding for privacy. Helps mitigate traffic analysis attacks."},
+			{"--ede", "Enable EDNS to receive Extended DNS Errors with detailed error information."},
+			{"--ecs=SUBNET", "EDNS Client Subnet (e.g., '192.0.2.0/24' or '2001:db8::/32'). Send client subnet for geo-aware responses."},
+			{"--bufsize=BYTES", "EDNS UDP buffer size in bytes (512-65535). Setting this enables EDNS even without other EDNS options. Default is 1232 when EDNS is enabled."},
+		},
+		"OutputOptions": []Option{
+			{"-J, --json", "Format the output as JSON."},
+			{"--short", "Short output format. Shows only the response section."},
+			{"--color", "Defaults to true. Set --color=false to disable colored output."},
+			{"--debug", "Enable debug logging."},
+			{"--time", "Shows how long the response took from the server."},
+		},
+		"GlobalPingOptions": []Option{
+			{"--gp-from=Germany", "Query using Globalping API from a specific location."},
+			{"--gp-limit=INT", "Limit the number of probes to use from Globalping."},
+		},
 	}
-	tmpl, err := template.New("test").Funcs(template.FuncMap{
+
+	tmpl, err := template.New("help").Funcs(template.FuncMap{
 		"color": func(clr string, format string, str string) string {
 			formatter := color.New()
-			switch c := clr; c {
+			switch clr {
 			case "yellow":
 				formatter = formatter.Add(color.FgYellow)
 			case "red":
@@ -79,7 +209,7 @@ func renderCustomHelp() {
 			case "green":
 				formatter = formatter.Add(color.FgGreen)
 			}
-			switch f := format; f {
+			switch format {
 			case "bold":
 				formatter = formatter.Add(color.Bold)
 			case "underline":
@@ -91,12 +221,10 @@ func renderCustomHelp() {
 		},
 	}).Parse(appHelpTextTemplate)
 	if err != nil {
-		// should ideally never happen.
 		panic(err)
 	}
-	err = tmpl.Execute(os.Stdout, helpTmplVars)
+	err = tmpl.Execute(color.Output, helpTmplVars)
 	if err != nil {
-		// should ideally never happen.
 		panic(err)
 	}
 	os.Exit(0)

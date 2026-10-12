@@ -118,3 +118,15 @@ func GetDefaultServers() ([]string, int, []string, error) {
 	servers, err := getDefaultDNSServers()
 	return servers, 0, nil, err
 }
+
+// GetAllServers returns the same servers as GetDefaultServers. Windows does not
+// expose Supplemental/scoped resolvers the way macOS does, so every configured
+// nameserver is already visible to every strategy.
+func GetAllServers() ([]string, int, []string, error) {
+	return GetDefaultServers()
+}
+
+// MatchDomainNameservers is a no-op on non-macOS platforms.
+func MatchDomainNameservers(queryNames []string) (nameservers []DomainNameserver, matchedDomains []string, ok bool) {
+	return nil, nil, false
+}

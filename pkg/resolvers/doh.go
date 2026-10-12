@@ -2,22 +2,34 @@ package resolvers
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/sirupsen/logrus"
+	"github.com/mr-karan/doggo/pkg/models"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
+
+const maxErrorBodyDrain = 64 << 10
 
 // DOHResolver represents the config options for setting up a DOH based resolver.
 type DOHResolver struct {
 	client          *http.Client
 	server          string
 	resolverOptions Options
+	closeTransport  func() error
+	closeMu         sync.Mutex
+	closed          bool
 }
 
 // NewDOHResolver accepts a nameserver address and configures a DOH based resolver.
@@ -30,68 +42,176 @@ func NewDOHResolver(server string, resolverOpts Options) (Resolver, error) {
 	if u.Scheme != "https" {
 		return nil, fmt.Errorf("missing https in %s", server)
 	}
+	tlsConfig := &tls.Config{
+		ServerName:         resolverOpts.TLSHostname,
+		InsecureSkipVerify: resolverOpts.InsecureSkipVerify,
+	}
+
+	var (
+		transport      http.RoundTripper
+		closeTransport func() error
+	)
+	if resolverOpts.UseHTTP3 {
+		h3Transport := &http3.Transport{TLSClientConfig: tlsConfig}
+		if resolverOpts.SourceAddr != "" || resolverOpts.UseIPv4 || resolverOpts.UseIPv6 {
+			network, laddr, err := sourceUDPAddr(resolverOpts.SourceAddr)
+			if err != nil {
+				return nil, err
+			}
+			requestedNetwork := ""
+			switch {
+			case resolverOpts.UseIPv4 && resolverOpts.UseIPv6:
+				return nil, fmt.Errorf("cannot enable both IPv4-only and IPv6-only")
+			case resolverOpts.UseIPv6:
+				requestedNetwork = "udp6"
+			case resolverOpts.UseIPv4:
+				requestedNetwork = "udp4"
+			}
+
+			if requestedNetwork != "" {
+				// If configured, the source address must match the selected family.
+				if network != "" && network != requestedNetwork {
+					return nil, fmt.Errorf("source address does not match requested IP family")
+				}
+				network = requestedNetwork
+			}
+			// One source-bound UDP socket and QUIC transport shared by every
+			// connection this resolver opens. Neither the HTTP/3 transport nor
+			// quic-go closes a caller-owned socket, so closeTransport closes
+			// them explicitly.
+			conn, err := net.ListenUDP(network, laddr)
+			if err != nil {
+				return nil, err
+			}
+			udpTransport := &quic.Transport{Conn: conn}
+			h3Transport.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+				remote, err := resolveUDPAddrCompat(ctx, network, addr)
+				if err != nil {
+					return nil, err
+				}
+				return udpTransport.DialEarly(ctx, remote, tlsCfg, cfg)
+			}
+			closeTransport = func() error {
+				return errors.Join(h3Transport.Close(), udpTransport.Close(), conn.Close())
+			}
+		} else {
+			closeTransport = h3Transport.Close
+		}
+		transport = h3Transport
+	} else {
+		httpsTransport := http.DefaultTransport.(*http.Transport).Clone()
+		httpsTransport.TLSClientConfig = tlsConfig
+		if resolverOpts.SourceAddr != "" {
+			// Match the DefaultTransport dialer being replaced: a 30s dial
+			// timeout and 30s TCP keepalive, plus the source local address.
+			dialer, err := sourceDialer("tcp", resolverOpts.SourceAddr, 30*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			httpsTransport.DialContext = dialer.DialContext
+		}
+
+		if resolverOpts.UseIPv4 || resolverOpts.UseIPv6 {
+			network := "tcp4"
+			if resolverOpts.UseIPv6 {
+				network = "tcp6"
+			}
+
+			dialContext := httpsTransport.DialContext
+			httpsTransport.DialContext = func(ctx context.Context, _ string, address string) (net.Conn, error) {
+				return dialContext(ctx, network, address)
+			}
+		}
+
+		transport = httpsTransport
+		closeTransport = func() error {
+			httpsTransport.CloseIdleConnections()
+			return nil
+		}
+	}
 	httpClient := &http.Client{
-		Timeout: resolverOpts.Timeout,
+		Timeout:   resolverOpts.Timeout,
+		Transport: transport,
 	}
 	return &DOHResolver{
 		client:          httpClient,
 		server:          server,
 		resolverOptions: resolverOpts,
+		closeTransport:  closeTransport,
 	}, nil
 }
 
-// Lookup takes a dns.Question and sends them to DNS Server.
+// query takes a dns.Question and sends them to DNS Server.
 // It parses the Response from the server in a custom output format.
-func (r *DOHResolver) Lookup(question dns.Question) (Response, error) {
+func (r *DOHResolver) query(ctx context.Context, question dns.Question, flags QueryFlags) (Response, error) {
 	var (
 		rsp      Response
-		messages = prepareMessages(question, r.resolverOptions.Ndots, r.resolverOptions.SearchList)
+		messages = prepareMessages(question, flags, r.resolverOptions.Ndots, r.resolverOptions.SearchList)
 	)
 
 	for _, msg := range messages {
-		r.resolverOptions.Logger.WithFields(logrus.Fields{
-			"domain":     msg.Question[0].Name,
-			"ndots":      r.resolverOptions.Ndots,
-			"nameserver": r.server,
-		}).Debug("Attempting to resolve")
+		r.resolverOptions.Logger.Debug("Attempting to resolve",
+			"domain", msg.Question[0].Name,
+			"ndots", r.resolverOptions.Ndots,
+			"nameserver", r.server,
+		)
 		// get the DNS Message in wire format.
 		b, err := msg.Pack()
 		if err != nil {
 			return rsp, err
 		}
 		now := time.Now()
-		// Make an HTTP POST request to the DNS server with the DNS message as wire format bytes in the body.
-		resp, err := r.client.Post(r.server, "application/dns-message", bytes.NewBuffer(b))
+
+		// Create a new request with the context
+		req, err := http.NewRequestWithContext(ctx, "POST", r.server, bytes.NewBuffer(b))
 		if err != nil {
 			return rsp, err
 		}
+		req.Header.Set("Content-Type", "application/dns-message")
+
+		// Make an HTTP POST request to the DNS server with the DNS message as wire format bytes in the body.
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return rsp, err
+		}
+
 		if resp.StatusCode == http.StatusMethodNotAllowed {
+			drainAndClose(resp.Body)
+
 			url, err := url.Parse(r.server)
 			if err != nil {
 				return rsp, err
 			}
 			url.RawQuery = fmt.Sprintf("dns=%v", base64.RawURLEncoding.EncodeToString(b))
-			resp, err = r.client.Get(url.String())
+
+			req, err = http.NewRequestWithContext(ctx, "GET", url.String(), nil)
+			if err != nil {
+				return rsp, err
+			}
+			resp, err = r.client.Do(req)
 			if err != nil {
 				return rsp, err
 			}
 		}
 		if resp.StatusCode != http.StatusOK {
+			drainAndClose(resp.Body)
 			return rsp, fmt.Errorf("error from nameserver %s", resp.Status)
 		}
 		rtt := time.Since(now)
+
 		// if debug, extract the response headers
-		if r.resolverOptions.Logger.IsLevelEnabled(logrus.DebugLevel) {
-			for header, value := range resp.Header {
-				r.resolverOptions.Logger.WithFields(logrus.Fields{
-					header: value,
-				}).Debug("DOH response header")
-			}
+		for header, value := range resp.Header {
+			r.resolverOptions.Logger.Debug("DOH response header", header, value)
 		}
+
 		// extract the binary response in DNS Message.
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
+			_ = resp.Body.Close()
 			return rsp, err
+		}
+		if err := resp.Body.Close(); err != nil {
+			r.resolverOptions.Logger.Debug("Error closing DOH response body", "error", err)
 		}
 
 		err = msg.Unpack(body)
@@ -103,7 +223,7 @@ func (r *DOHResolver) Lookup(question dns.Question) (Response, error) {
 			ques := Question{
 				Name:  q.Name,
 				Class: dns.ClassToString[q.Qclass],
-				Type:  dns.TypeToString[q.Qtype],
+				Type:  models.RecordTypeString(q.Qtype),
 			}
 			rsp.Questions = append(rsp.Questions, ques)
 		}
@@ -111,11 +231,50 @@ func (r *DOHResolver) Lookup(question dns.Question) (Response, error) {
 		output := parseMessage(&msg, rtt, r.server)
 		rsp.Authorities = output.Authorities
 		rsp.Answers = output.Answers
+		rsp.Additional = output.Additional
+		rsp.Edns = mergeEdnsInfo(rsp.Edns, output.Edns)
 
-		if len(output.Answers) > 0 {
+		if len(output.Answers) > 0 || msg.Rcode == dns.RcodeSuccess {
 			// stop iterating the searchlist.
 			break
 		}
+
+		// Check if context is done after each iteration
+		select {
+		case <-ctx.Done():
+			return rsp, ctx.Err()
+		default:
+			// Continue to next iteration
+		}
 	}
 	return rsp, nil
+}
+
+func drainAndClose(body io.ReadCloser) {
+	_, _ = io.CopyN(io.Discard, body, maxErrorBodyDrain)
+	_ = body.Close()
+}
+
+// Close releases connections and sockets owned by the HTTP transport.
+func (r *DOHResolver) Close() error {
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+	if r.closed || r.closeTransport == nil {
+		return nil
+	}
+	if err := r.closeTransport(); err != nil {
+		return err
+	}
+	r.closed = true
+	return nil
+}
+
+// Address implements the Resolver interface.
+func (r *DOHResolver) Address() string {
+	return r.server
+}
+
+// Lookup implements the Resolver interface
+func (r *DOHResolver) Lookup(ctx context.Context, questions []dns.Question, flags QueryFlags) ([]Response, error) {
+	return ConcurrentLookup(ctx, questions, flags, r.query, r.resolverOptions.Logger)
 }

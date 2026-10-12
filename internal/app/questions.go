@@ -1,17 +1,30 @@
 package app
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/miekg/dns"
+	"github.com/mr-karan/doggo/pkg/models"
+	"golang.org/x/net/idna"
 )
 
 // LoadFallbacks sets fallbacks for options
 // that are not specified by the user but necessary
 // for the resolver.
 func (app *App) LoadFallbacks() {
-	if len(app.QueryFlags.QTypes) == 0 {
-		app.QueryFlags.QTypes = append(app.QueryFlags.QTypes, "A")
+	if app.QueryFlags.QueryAny {
+		app.QueryFlags.QTypes = models.GetCommonRecordTypes()
+	} else if len(app.QueryFlags.QTypes) == 0 {
+		if app.QueryFlags.UseIPv4 {
+			app.QueryFlags.QTypes = append(app.QueryFlags.QTypes, "A")
+		} else if app.QueryFlags.UseIPv6 {
+			app.QueryFlags.QTypes = append(app.QueryFlags.QTypes, "AAAA")
+		} else {
+			app.QueryFlags.QTypes = append(app.QueryFlags.QTypes, "A")
+			app.QueryFlags.QTypes = append(app.QueryFlags.QTypes, "AAAA")
+		}
 	}
 	if len(app.QueryFlags.QClasses) == 0 {
 		app.QueryFlags.QClasses = append(app.QueryFlags.QClasses, "IN")
@@ -20,18 +33,38 @@ func (app *App) LoadFallbacks() {
 
 // PrepareQuestions takes a list of query names, query types and query classes
 // and prepare a question for each combination of the above.
-func (app *App) PrepareQuestions() {
+func (app *App) PrepareQuestions() error {
+	queryTypes := make([]uint16, len(app.QueryFlags.QTypes))
+	normalizedTypes := make([]string, len(app.QueryFlags.QTypes))
+	for i, value := range app.QueryFlags.QTypes {
+		queryType, err := models.ParseRecordType(value)
+		if err != nil {
+			return err
+		}
+		queryTypes[i] = queryType
+		normalizedTypes[i] = models.RecordTypeString(queryType)
+	}
+	app.QueryFlags.QTypes = normalizedTypes
+
 	for _, n := range app.QueryFlags.QNames {
-		for _, t := range app.QueryFlags.QTypes {
+		// Convert IDN (internationalized domain names) to ASCII-compatible encoding (punycode)
+		// This allows domains with unicode characters (umlauts, etc.) to be resolved properly
+		asciiName, err := idna.ToASCII(n)
+		if err != nil {
+			return fmt.Errorf("converting domain name %q to ASCII: %w", n, err)
+		}
+
+		for _, queryType := range queryTypes {
 			for _, c := range app.QueryFlags.QClasses {
 				app.Questions = append(app.Questions, dns.Question{
-					Name:   n,
-					Qtype:  dns.StringToType[strings.ToUpper(t)],
+					Name:   asciiName,
+					Qtype:  queryType,
 					Qclass: dns.StringToClass[strings.ToUpper(c)],
 				})
 			}
 		}
 	}
+	return nil
 }
 
 // ReverseLookup is used to perform a reverse DNS Lookup
@@ -46,8 +79,8 @@ func (app *App) ReverseLookup() {
 	for _, n := range app.QueryFlags.QNames {
 		addr, err := dns.ReverseAddr(n)
 		if err != nil {
-			app.Logger.WithError(err).Error("error formatting address")
-			app.Logger.Exit(2)
+			app.Logger.Error("error formatting address", "error", err)
+			os.Exit(2)
 		}
 		formattedNames = append(formattedNames, addr)
 	}

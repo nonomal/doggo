@@ -5,238 +5,156 @@
   <p align="center">
     🐶 <i>Command-line DNS client for humans</i>
     <br/>
-    <a href="https://doggo.mrkaran.dev">doggo.mrkaran.dev</a>
+  </p>
+  <p align="center">
+    <a href="https://doggo.mrkaran.dev/" target="_blank">Web Interface</a>
+    ·
+    <a href="https://doggo.mrkaran.dev/docs/" target="_blank">Documentation</a>
   </p>
   <img src="www/static/doggo.png" alt="doggo CLI usage">
 </p>
 
 ---
 
-**doggo** is a modern command-line DNS client (like _dig_) written in Golang. It outputs information in a neat concise manner and supports protocols like DoH, DoT and DNSCrypt as well.
+**doggo** is a modern command-line DNS client (like _dig_) written in Golang. It outputs information in a neat concise manner and supports protocols like DoH, DoT, DoQ, and DNSCrypt as well.
 
-It's totally inspired from [dog](https://github.com/ogham/dog/) which is written in Rust. I wanted to add some features to it but since I don't know Rust, I found it as a nice opportunity
-to experiment with writing a DNS Client from scratch in `Go` myself. Hence the name `dog` +`go` => **doggo**.
-
-## Features
-
-- Human readable output - supports **colors** and **tabular** format.
-- Supports **JSON** format - can be useful while writing scripts.
-- Has support for multiple transport protocols:
-  - DNS over **HTTPS** (DoH)
-  - DNS over **TLS** (DoT)
-  - DNS over **TCP**
-  - DNS over **UDP**
-  - DNS over **DNSCrypt**
-- Supports **ndots** and **search** configurations from `resolv.conf` or command-line arguments.
-- Supports multiple resolvers at once.
-- Supports IPv4 **and** IPv6 _both_.
-- Available as a web tool as well: [https://doggo.mrkaran.dev](https://doggo.mrkaran.dev).
-- Shell completions for `zsh` and `fish`.
-- Reverse DNS Lookups.
+It's totally inspired by [dog](https://github.com/ogham/dog/) which is written in Rust. I wanted to add some features to it but since I don't know Rust, I found it as a nice opportunity to experiment with writing a DNS Client from scratch in `Go` myself. Hence the name `dog` + `go` => **doggo**.
 
 ## Installation
 
-### Binary
-
-You can grab the latest binaries for Linux, MacOS and Windows from the [Releases](https://github.com/mr-karan/doggo/releases) section.
-
-For eg, to pull the latest `linux-amd64` binary:
+### Easy Install (Recommended)
 
 ```shell
-$ cd "$(mktemp -d)"
-$ curl -sL "https://github.com/mr-karan/doggo/releases/download/v0.3.7/doggo_0.3.7_linux_amd64.tar.gz" | tar xz
-$ mv doggo /usr/local/bin
-# doggo should be available now in your $PATH
-$ doggo
-```
-### Docker
-
-Images are hosted on Github Container Registry (ghcr.io).
-You can view all the tags [here](https://github.com/users/mr-karan/packages/container/package/doggo). It even supports **ARM** so you can spin up a container on your RPi to do DNS lookups, cause why not.
-
-**Pull**
-
-`docker pull ghcr.io/mr-karan/doggo:latest`
-
-**Running**
-
-You can supply all arguments to the CLI directly to `docker run` command. Eg:
-
-`docker run ghcr.io/mr-karan/doggo:latest mrkaran.dev @1.1.1.1 MX`
-
-### Using snap
-
-[![Get it from the Snap Store](https://snapcraft.io/static/images/badges/en/snap-store-black.svg)](https://snapcraft.io/doggo)
-
-```sh
-$ sudo snap install doggo
+curl -fsSL https://raw.githubusercontent.com/mr-karan/doggo/main/install.sh | sh
 ```
 
-**NOTE**: Since the [confinement](https://snapcraft.io/docs/snap-confinement) mode is strict as of now, it cannot access your host's `/etc/resolv.conf`.
-I'll be making a request in the Snap forums soon so that it can be manually reviewed and allowed to use `--classic`. Until then, please specify a nameserver manually
-if using `snap`.
+### Package Managers
 
-### From Source
+- Arch Linux: `pacman -S doggo`
+- Eget: `eget mr-karan/doggo`
+- Gentoo: `emerge net-dns/doggo`
+- Homebrew: `brew install doggo`
+- MacPorts (macOS): `port install doggo`
+- [Mise](https://github.com/jdx/mise): `mise use -g doggo@latest`
+- Nix: `nix profile install nixpkgs#doggo`
+- Scoop (Windows): `scoop install doggo`
+- Winget (Windows): `winget install doggo`
 
-You need to have `go` installed in your system.
+### Binary Install
 
-```bash
-$ go get github.com/mr-karan/doggo/cmd/doggo
+You can download pre-compiled binaries for various operating systems and architectures from the [Releases](https://github.com/mr-karan/doggo/releases) page.
+
+Linux 32-bit ARM releases are available as `doggo-linux-armv6.tar.gz` (ARMv6) and `doggo-linux-armv7.tar.gz` (ARMv7 and 32-bit ARMv8). The `doggo-linux-arm.tar.gz` compatibility asset is the ARMv7 build.
+
+FreeBSD, OpenBSD, and NetBSD ARMv7 releases use the explicit `doggo-<os>-armv7.tar.gz` name and retain their historical `doggo-<os>-arm.tar.gz` aliases.
+
+### Go Install
+
+If you have Go installed on your system, you can use the `go install` command:
+
+```shell
+go install github.com/mr-karan/doggo/cmd/doggo@latest
 ```
 
 The binary will be available at `$GOPATH/bin/doggo`.
 
-## Usage Examples
+### Docker
 
-**Do a simple DNS Lookup for `mrkaran.dev`**
-
-```bash
-$ doggo mrkaran.dev                                                                         
-NAME            TYPE    CLASS   TTL     ADDRESS         NAMESERVER   
-mrkaran.dev.    A       IN      20s     13.250.205.9    127.0.0.1:53
-mrkaran.dev.    A       IN      20s     206.189.89.118  127.0.0.1:53
+```shell
+docker pull ghcr.io/mr-karan/doggo:latest
+docker run --rm ghcr.io/mr-karan/doggo:latest example.com
 ```
 
-**Query MX records for `github.com` using `9.9.9.9` resolver**
+For more installation options, including binary downloads and Docker images, please refer to the [full installation guide](https://doggo.mrkaran.dev/docs/intro/installation/).
 
-```
+## Quick Start
+
+Here are some quick examples to get you started with doggo:
+
+```shell
+# Simple DNS lookup
+doggo example.com
+
+# Query MX records using a specific nameserver
 doggo MX github.com @9.9.9.9
-NAME            TYPE    CLASS   TTL     ADDRESS                         NAMESERVER 
-github.com.     MX      IN      3600s   10 alt3.aspmx.l.google.com.     9.9.9.9:53
-github.com.     MX      IN      3600s   5 alt1.aspmx.l.google.com.      9.9.9.9:53
-github.com.     MX      IN      3600s   10 alt4.aspmx.l.google.com.     9.9.9.9:53
-github.com.     MX      IN      3600s   5 alt2.aspmx.l.google.com.      9.9.9.9:53
-github.com.     MX      IN      3600s   1 aspmx.l.google.com.           9.9.9.9:53
+
+# Use DNS over HTTPS
+doggo example.com @https://cloudflare-dns.com/dns-query
+
+# JSON output for scripting
+doggo example.com --json | jq '.responses[0].answers[].address'
+
+# Reverse DNS lookup
+doggo --reverse 8.8.8.8 --short
+
+# Follow the delegation chain iteratively
+doggo example.com --trace
+
+# Using Globalping
+doggo example.com --gp-from Germany,Japan --gp-limit 2
 ```
 
-or using _named parameters_:
+## Configuration
 
-```bash
-$ doggo -t MX -n 9.9.9.9 github.com
-NAME            TYPE    CLASS   TTL     ADDRESS                         NAMESERVER 
-github.com.     MX      IN      3600s   10 alt3.aspmx.l.google.com.     9.9.9.9:53
-github.com.     MX      IN      3600s   5 alt1.aspmx.l.google.com.      9.9.9.9:53
-github.com.     MX      IN      3600s   10 alt4.aspmx.l.google.com.     9.9.9.9:53
-github.com.     MX      IN      3600s   5 alt2.aspmx.l.google.com.      9.9.9.9:53
-github.com.     MX      IN      3600s   1 aspmx.l.google.com.           9.9.9.9:53
+Defaults for any flag can be set via a TOML config file or `DOGGO_*` environment variables, so you don't have to repeat flags on every invocation:
+
+```shell
+# ~/.config/doggo/config.toml (or $XDG_CONFIG_HOME/doggo/config.toml, ~/.doggo.toml)
+strategy = "first"
+color    = false
+timeout  = "10s"
+
+# HTTP/3 must be paired with a persistent HTTPS (DoH) nameserver.
+nameserver = ["https://cloudflare-dns.com/dns-query"]
+http3     = true
 ```
 
-**Query DNS records for `archive.org` using Cloudflare DoH resolver**
-
-```bash
-$ doggo archive.org @https://cloudflare-dns.com/dns-query 
-NAME            TYPE    CLASS   TTL     ADDRESS         NAMESERVER                           
-archive.org.    A       IN      41s     207.241.224.2   https://cloudflare-dns.com/dns-query
+```shell
+# Equivalent environment variables
+export DOGGO_STRATEGY=first
+export DOGGO_COLOR=false
+export DOGGO_NAMESERVER=https://cloudflare-dns.com/dns-query
+export DOGGO_HTTP3=true
 ```
 
-**Query DNS records for `internetfreedom.in` with JSON output**
+Precedence (lowest to highest): flag defaults < config file < environment variables < command line flags. Use `--config=PATH` or `DOGGO_CONFIG` to load a file from a custom location.
 
-```bash
-$ doggo internetfreedom.in --json | jq
-{
-  "responses": {
-    "answers": [
-      {
-        "name": "internetfreedom.in.",
-        "type": "A",
-        "class": "IN",
-        "ttl": "22s",
-        "address": "104.27.158.96",
-        "rtt": "37ms",
-        "nameserver": "127.0.0.1:53"
-      },
-      {
-        "name": "internetfreedom.in.",
-        "type": "A",
-        "class": "IN",
-        "ttl": "22s",
-        "address": "104.27.159.96",
-        "rtt": "37ms",
-        "nameserver": "127.0.0.1:53"
-      },
-      {
-        "name": "internetfreedom.in.",
-        "type": "A",
-        "class": "IN",
-        "ttl": "22s",
-        "address": "172.67.202.77",
-        "rtt": "37ms",
-        "nameserver": "127.0.0.1:53"
-      }
-    ],
-    "queries": [
-      {
-        "name": "internetfreedom.in.",
-        "type": "A",
-        "class": "IN"
-      }
-    ]
-  }
-}
-```
+[`config-cli-sample.toml`](config-cli-sample.toml) documents every supported key with its default. See the [CLI reference](https://doggo.mrkaran.dev/docs/guide/reference/#configuration-file-and-environment-variables) for details.
 
-**Query DNS records for `duckduckgo.com` and show RTT (Round Trip Time)**
+## Features
 
-```bash
-$ doggo duckduckgo.com --time                
-NAME            TYPE    CLASS   TTL     ADDRESS         NAMESERVER      TIME TAKEN 
-duckduckgo.com. A       IN      30s     40.81.94.43     127.0.0.1:53    45ms      
-```
+- Human-readable output with color-coded and tabular format
+- JSON output support for easy scripting and parsing
+- Iterative delegation tracing with `--trace`
+- Multiple transport protocols: DoH, DoT, DoQ, TCP, UDP, DNSCrypt
+- Explicit DNS-over-HTTPS over HTTP/3 with `--http3`
+- EDNS support with Client Subnet (ECS), NSID, Cookies, Padding, and Extended Errors
+- Additional section support for glue records and supplementary data
+- Internationalized Domain Names (IDN) with automatic punycode conversion
+- Support for `ndots` and `search` configurations
+- Multiple resolver support with customizable query strategies
+- Bind queries to a local source address with `-b`/`--source`, like `dig -b`
+- IPv4 and IPv6 support
+- Web interface available
+- Shell completions for `zsh` and `fish`
+- Reverse DNS lookups
+- Flexible query options including various DNS flags
+- Debug mode for troubleshooting
+- Response time measurement
+- Cross-platform support
 
-## Command-line Arguments
+## Documentation
 
-![](www/static/help.png)
+For comprehensive documentation, including detailed usage instructions, configuration options, and advanced features, please visit our [official documentation site](https://doggo.mrkaran.dev/docs/).
 
-### Transport Options
+## Sponsorship
 
-URL scheme of the server is used to identify which resolver to use for lookups. If no scheme is specified, defaults to `udp`.
+If you find doggo useful and would like to support its development, please consider becoming a sponsor. Your support helps maintain and improve this open-source project.
 
-```
-  @udp://        eg: @1.1.1.1 initiates a UDP resolver for 1.1.1.1:53.
-  @tcp://        eg: @1.1.1.1 initiates a TCP resolver for 1.1.1.1:53.
-  @https://      eg: @https://cloudflare-dns.com/dns-query initiates a DOH resolver for Cloudflare DoH server.
-  @tls://        eg: @1.1.1.1 initiates a DoT resolver for 1.1.1.1:853.
-  @sdns://       eg: @sdns://AgcAAAAAAAAABzEuMC4wLjEAEmRucy5jbG91ZGZsYXJlLmNvbQovZG5zLXF1ZXJ5
-                 initiates a DNSCrypt or DoH resolver using its DNS stamp.
-```
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/mr-karan?style=for-the-badge&logo=github)](https://github.com/sponsors/mr-karan)
 
-### Query Options
-
-```
-  -q, --query=HOSTNAME        Hostname to query the DNS records for (eg mrkaran.dev).
-  -t, --type=TYPE             Type of the DNS Record (A, MX, NS etc).
-  -n, --nameserver=ADDR       Address of a specific nameserver to send queries to (9.9.9.9, 8.8.8.8 etc).
-  -c, --class=CLASS           Network class of the DNS record (IN, CH, HS etc).
-```
-
-### Resolver Options
-
-```
-  --ndots=INT        Specify ndots parameter. Takes value from /etc/resolv.conf if using the system nameserver or 1 otherwise.
-  --search           Use the search list defined in resolv.conf. Defaults to true. Set --search=false to disable search list.
-  --timeout          Specify timeout (in seconds) for the resolver to return a response.
-  -4 --ipv4          Use IPv4 only.
-  -6 --ipv6          Use IPv6 only.
-```
-
-
-### Output Options
-
-```
-  -J, --json                  Format the output as JSON.
-  --color                     Defaults to true. Set --color=false to disable colored output.
-  --debug                     Enable debug logging.
-  --time                      Shows how long the response took from the server.
-```
-
----
-
-## Contributing
-
-I'm open to accept feature requests and/or issues. I understand `doggo` is a new DNS Client in the town and there might be some edge cases I am not handling.
-Please feel free to open issues if you ever come across such a case.
-For now I am focussing more on [planned features](TODO.md) for a **stable** v1.0 release _soon_.
+Every contribution, no matter how small, is greatly appreciated and helps keep this project alive and growing. Thank you for your support! 🐶❤️
 
 ## License
 
-[LICENSE](LICENSE)
+[LICENSE](./LICENSE)

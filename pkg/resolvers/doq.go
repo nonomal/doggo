@@ -1,0 +1,229 @@
+package resolvers
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/mr-karan/doggo/pkg/models"
+	"github.com/quic-go/quic-go"
+)
+
+// DOQResolver represents the config options for setting up a DOQ based resolver.
+type DOQResolver struct {
+	tls             *tls.Config
+	server          string
+	resolverOptions Options
+}
+
+// splitHostPort splits a host:port string and handles IPv6 addresses properly.
+// Returns the host without port and brackets.
+func splitHostPort(addr string) (host, port string, err error) {
+	host, port, err = net.SplitHostPort(addr)
+	if err != nil {
+		return "", "", err
+	}
+	// Remove brackets from IPv6 addresses
+	host = strings.Trim(host, "[]")
+	return host, port, nil
+}
+
+// NewDOQResolver accepts a nameserver address and configures a DOQ based resolver.
+func NewDOQResolver(server string, resolverOpts Options) (Resolver, error) {
+	// Extract hostname from server address for TLS verification
+	// If TLSHostname is explicitly set via flag, use that; otherwise extract from server address
+	tlsHostname := resolverOpts.TLSHostname
+	if tlsHostname == "" {
+		// server is in format "hostname:port", extract just the hostname
+		host, _, err := splitHostPort(server)
+		if err == nil {
+			tlsHostname = host
+		}
+	}
+
+	return &DOQResolver{
+		tls: &tls.Config{
+			NextProtos:         []string{"doq"},
+			ServerName:         tlsHostname,
+			InsecureSkipVerify: resolverOpts.InsecureSkipVerify,
+		},
+		server:          server,
+		resolverOptions: resolverOpts,
+	}, nil
+}
+
+// Address implements the Resolver interface.
+func (r *DOQResolver) Address() string {
+	return r.server
+}
+
+// Lookup implements the Resolver interface
+func (r *DOQResolver) Lookup(ctx context.Context, questions []dns.Question, flags QueryFlags) ([]Response, error) {
+	return ConcurrentLookup(ctx, questions, flags, r.query, r.resolverOptions.Logger)
+}
+
+// query takes a dns.Question and sends them to DNS Server.
+// It parses the Response from the server in a custom output format.
+func (r *DOQResolver) query(ctx context.Context, question dns.Question, flags QueryFlags) (Response, error) {
+	var (
+		rsp      Response
+		messages = prepareMessages(question, flags, r.resolverOptions.Ndots, r.resolverOptions.SearchList)
+	)
+
+	var session *quic.Conn
+	if r.resolverOptions.SourceAddr != "" || r.resolverOptions.UseIPv4 || r.resolverOptions.UseIPv6 {
+		network, laddr, err := sourceUDPAddr(r.resolverOptions.SourceAddr)
+		if err != nil {
+			return rsp, err
+		}
+		requestedNetwork := ""
+		switch {
+		case r.resolverOptions.UseIPv4 && r.resolverOptions.UseIPv6:
+			return rsp, fmt.Errorf("cannot enable both IPv4-only and IPv6-only")
+		case r.resolverOptions.UseIPv6:
+			requestedNetwork = "udp6"
+		case r.resolverOptions.UseIPv4:
+			requestedNetwork = "udp4"
+		}
+
+		if requestedNetwork != "" {
+			if network != "" && network != requestedNetwork {
+				return rsp, fmt.Errorf("source address does not match requested IP family")
+			}
+			network = requestedNetwork
+		}
+		remote, err := resolveUDPAddrCompat(ctx, network, r.server)
+		if err != nil {
+			return rsp, err
+		}
+		conn, err := net.ListenUDP(network, laddr)
+		if err != nil {
+			return rsp, err
+		}
+		defer conn.Close()
+		session, err = quic.Dial(ctx, conn, remote, r.tls, nil)
+		if err != nil {
+			return rsp, err
+		}
+	} else {
+		var err error
+		session, err = quic.DialAddr(ctx, r.server, r.tls, nil)
+		if err != nil {
+			return rsp, err
+		}
+	}
+	defer session.CloseWithError(quic.ApplicationErrorCode(quic.NoError), "")
+
+	for _, msg := range messages {
+		r.resolverOptions.Logger.Debug("Attempting to resolve",
+			"domain", msg.Question[0].Name,
+			"ndots", r.resolverOptions.Ndots,
+			"nameserver", r.server,
+		)
+
+		// ref: https://www.rfc-editor.org/rfc/rfc9250.html#name-dns-message-ids
+		msg.Id = 0
+
+		// get the DNS Message in wire format.
+		b, err := msg.Pack()
+		if err != nil {
+			return rsp, err
+		}
+		now := time.Now()
+
+		stream, err := session.OpenStreamSync(ctx)
+		if err != nil {
+			return rsp, err
+		}
+
+		msgLen := uint16(len(b))
+		msgLenBytes := []byte{byte(msgLen >> 8), byte(msgLen & 0xFF)}
+		if _, err = stream.Write(msgLenBytes); err != nil {
+			return rsp, err
+		}
+		// Make a QUIC request to the DNS server with the DNS message as wire format bytes in the body.
+		if _, err = stream.Write(b); err != nil {
+			return rsp, err
+		}
+
+		// The client MUST send the DNS query over the selected stream, and MUST
+		// indicate through the STREAM FIN mechanism that no further data will be
+		// sent on that stream. Note, that stream.Close() closes the write-direction
+		// of the stream, but does not prevent reading from it.
+		// See: https://github.com/AdguardTeam/dnsproxy/blob/f901a5f4b9e8d5f143dce459067bc6614c6d927d/upstream/doq.go#L247-L254
+		err = stream.Close()
+		if err != nil {
+			return rsp, fmt.Errorf("unable to close quic stream: %w", err)
+		}
+
+		// Use a separate context with timeout for reading the response
+		readCtx, cancel := context.WithTimeout(ctx, r.resolverOptions.Timeout)
+		defer cancel()
+
+		var buf []byte
+		errChan := make(chan error, 1)
+		go func() {
+			var err error
+			buf, err = io.ReadAll(stream)
+			errChan <- err
+		}()
+
+		select {
+		case err := <-errChan:
+			if err != nil {
+				return rsp, err
+			}
+		case <-readCtx.Done():
+			return rsp, fmt.Errorf("timeout reading response")
+		}
+
+		rtt := time.Since(now)
+
+		if len(buf) < 2 {
+			return rsp, fmt.Errorf("response too short: got %d bytes, need at least 2", len(buf))
+		}
+
+		packetLen := binary.BigEndian.Uint16(buf[:2])
+		if packetLen != uint16(len(buf[2:])) {
+			return rsp, fmt.Errorf("packet length mismatch")
+		}
+		if err = msg.Unpack(buf[2:]); err != nil {
+			return rsp, err
+		}
+		// pack questions in output.
+		for _, q := range msg.Question {
+			ques := Question{
+				Name:  q.Name,
+				Class: dns.ClassToString[q.Qclass],
+				Type:  models.RecordTypeString(q.Qtype),
+			}
+			rsp.Questions = append(rsp.Questions, ques)
+		}
+		// get the authorities and answers.
+		output := parseMessage(&msg, rtt, r.server)
+		rsp.Authorities = output.Authorities
+		rsp.Answers = output.Answers
+		rsp.Additional = output.Additional
+		rsp.Edns = mergeEdnsInfo(rsp.Edns, output.Edns)
+
+		if len(output.Answers) > 0 || msg.Rcode == dns.RcodeSuccess {
+			// stop iterating the searchlist.
+			break
+		}
+
+		// Check if context is done after each iteration
+		select {
+		case <-ctx.Done():
+			return rsp, ctx.Err()
+		default:
+			// Continue to next iteration
+		}
+	}
+	return rsp, nil
+}

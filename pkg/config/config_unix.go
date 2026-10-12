@@ -1,4 +1,5 @@
-// +build !windows
+//go:build !windows && !darwin
+// +build !windows,!darwin
 
 package config
 
@@ -9,7 +10,7 @@ import (
 )
 
 // DefaultResolvConfPath specifies path to default resolv config file on UNIX.
-const DefaultResolvConfPath = "/etc/resolv.conf"
+var DefaultResolvConfPath = "/etc/resolv.conf"
 
 // GetDefaultServers get system default nameserver
 func GetDefaultServers() ([]string, int, []string, error) {
@@ -27,4 +28,16 @@ func GetDefaultServers() ([]string, int, []string, error) {
 		servers = append(servers, server)
 	}
 	return servers, cfg.Ndots, cfg.Search, nil
+}
+
+// GetAllServers returns the same servers as GetDefaultServers. On UNIX,
+// resolv.conf has no concept of Supplemental/scoped resolvers, so every
+// configured nameserver is already visible to every strategy.
+func GetAllServers() ([]string, int, []string, error) {
+	return GetDefaultServers()
+}
+
+// MatchDomainNameservers is a no-op on non-macOS platforms.
+func MatchDomainNameservers(queryNames []string) (nameservers []DomainNameserver, matchedDomains []string, ok bool) {
+	return nil, nil, false
 }
